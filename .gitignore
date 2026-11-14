@@ -32,3 +32,6 @@ target/
 *.o
 *.obj
 .DS_Store
+
+# 测试与截图按 README 约定存放仓库外；本地执行时忽略镜像目录
+test-artifacts/

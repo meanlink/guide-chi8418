@@ -8,3 +8,8 @@ class JobStatus(str, Enum):
     running = 'running'
     completed = 'completed'
     failed = 'failed'
+class SegmentStatus(str, Enum):
+    pending = 'pending'
+    running = 'running'
+    completed = 'completed'
+    failed = 'failed'

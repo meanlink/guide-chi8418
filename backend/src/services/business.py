@@ -28,7 +28,8 @@ def seed_records():
     return rows
 
 
-def analyze(records, params):
+def validate(params):
+    """校验参数并返回规范化后的 (zone, alpha)。"""
     zone = str(params.get("zone", "全部"))
     try:
         alpha = float(params.get("alpha", .05))
@@ -36,23 +37,46 @@ def analyze(records, params):
         raise ValueError("显著性水平必须为 0.01/0.05/0.1")
     if alpha not in (.01, .05, .1) or zone not in ("全部", "星空厅", "水世界", "机械坊"):
         raise ValueError("未知展区或显著性水平")
-    total = {"A": [0, 0], "B": [0, 0]}
-    zones = {}
+    return zone, alpha
+
+
+def accumulate(records):
+    """把一组原始记录汇入分段计数。未通过行级校验时抛 ValueError，不产生部分计数。"""
+    partial = {"visitors": 0, "completed": 0, "buckets": {}}
     for r in records:
         try:
             v, c = float(r["visitors"]), float(r["completed"])
             name, arm = str(r["zone"]), str(r["arm"])
-            if arm not in total or not all(math.isfinite(x) and x.is_integer() for x in (v, c)) or v <= 0 or not 0 <= c <= v:
+            if arm not in ("A", "B") or not all(math.isfinite(x) and x.is_integer() for x in (v, c)) or v <= 0 or not 0 <= c <= v:
                 raise ValueError()
-            if zone != "全部" and zone != name:
-                continue
-            total[arm][0] += int(c)
-            total[arm][1] += int(v - c)
-            bucket = zones.setdefault((name, arm), [0, 0])
+            partial["visitors"] += int(v)
+            partial["completed"] += int(c)
+            bucket = partial["buckets"].setdefault((name, arm), [0, 0])
             bucket[0] += int(v)
             bucket[1] += int(c)
         except (ValueError, TypeError, KeyError):
             raise ValueError("方案须为 A/B，人数为整数，且 0≤完成≤进区")
+    return partial
+
+
+def merge_partials(partials, params):
+    """把多个分段的局部计数合并为整批结果。
+
+    合并顺序固定按分段序号；每个分段只带入一次，因此重跑或接管不会重复汇入计数。
+    """
+    zone, alpha = validate(params)
+    total = {"A": [0, 0], "B": [0, 0]}
+    zones = {}
+    for partial in partials:
+        for (name, arm), counts in partial["buckets"].items():
+            if zone != "全部" and zone != name:
+                continue
+            # 与整批路径一致：过滤在前，汇总在后；完成数折算为未完成数。
+            total[arm][0] += counts[1]
+            total[arm][1] += counts[0] - counts[1]
+            bucket = zones.setdefault((name, arm), [0, 0])
+            bucket[0] += counts[0]
+            bucket[1] += counts[1]
     observed = np.array([total["A"], total["B"]], dtype=float)
     if np.any(observed.sum(axis=0) == 0) or np.any(observed.sum(axis=1) == 0):
         raise ValueError("两方案与两结果类别均须有样本")
@@ -69,3 +93,8 @@ def analyze(records, params):
             "table": {"columns": [{"key": "zone", "label": "展区"}, {"key": "arm", "label": "方案"}, {"key": "visitors", "label": "进区"}, {"key": "completed", "label": "完成"}, {"key": "incomplete", "label": "未完成"}, {"key": "rate", "label": "完成率 %"}], "rows": rows},
             "chart": {"type": "bar", "labels": ["A 方案", "B 方案"], "series": [{"name": "完成率 %", "values": [round(rates["A"], 4), round(rates["B"], 4)]}]},
             "findings": [f"A 完成 {total['A'][0]} / {sum(total['A'])}，B 完成 {total['B'][0]} / {sum(total['B'])}。", f"有效样本 N={n}，自由度={int(df)}；检验 α={alpha:g}。", "逐展区复核构成差异后再设计下一轮随机试点。"], "method": metadata()["method"], "warnings": warnings}
+
+
+def analyze(records, params):
+    """整批一次算完的路径，供单测与基线场景使用；结果必须与分段合并路径一致。"""
+    return merge_partials([accumulate(records)], params)

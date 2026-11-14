@@ -33,6 +33,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:-guide-chi-development-only}
       SEED_DEMO: ${SEED_DEMO:-true}
       ARTIFACT_DIR: /artifacts
+      SEGMENT_SIZE: ${SEGMENT_SIZE:-40}
+      SEGMENT_LEASE_SECONDS: ${SEGMENT_LEASE_SECONDS:-120}
+      SEGMENT_MAX_ATTEMPTS: ${SEGMENT_MAX_ATTEMPTS:-3}
     ports: ["${BACKEND_PORT:-19204}:8000"]
     volumes: ["analysis-artifacts:/artifacts"]
     depends_on:
@@ -46,7 +49,8 @@ services:
       start_period: 15s
   worker:
     build: ./backend
-    container_name: ${COMPOSE_PROJECT_NAME:-guide-chi}-worker
+    # 故意不设 container_name：允许 `docker compose up -d --scale worker=2` 加开执行进程，
+    # 分段租约与 epoch 栅栏保证并发抢占时每条计数只汇入一次。
     command: ["python", "-m", "src.worker"]
     environment: *app-env
     volumes: ["analysis-artifacts:/artifacts"]

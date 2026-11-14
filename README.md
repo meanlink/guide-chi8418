@@ -3,7 +3,7 @@
 分类独立性检验的真实业务分析小型项目。完整模拟客户、痛点、上下游、算法公式与一天工作剧本见 [BUSINESS.md](BUSINESS.md)。
 
 ## 模块与业务流程
-数据接入（JSON/CSV、字段验证、批次指纹）→ 参数化分析（异步 Python worker）→ 结果复核（指标、图形、明细、解释、批准）→ 定时分发（本地收件箱、CSV/JSON、SHA256）；另有业务总览和审计轨迹。
+数据接入（JSON/CSV、字段验证、批次指纹）→ 参数化分析（异步 Python worker，按记录分段保存检查点）→ 结果复核（指标、图形、明细、解释、分段进度、批准）→ 定时分发（本地收件箱、CSV/JSON、SHA256）；另有业务总览和审计轨迹。
 三个贯穿全栈的实体：Dataset 数据批次、Job 分析任务、Report 分发计划；辅助 User、Audit、Delivery。
 
 ## 快速启动
@@ -21,6 +21,14 @@ docker compose exec -T backend python -m scripts.seed_demo
 |admin@demo.local|Demo123!|接入、执行、批准、分发、暂停、读取与下载|
 |analyst@demo.local|Demo123!|接入、执行、读取与下载；不能批准或安排分发|
 |viewer@demo.local|Demo123!|只读与下载|
+
+## 分段核验与断点恢复
+大批量核验按 `SEGMENT_SIZE`（默认 40 条记录）切段，段边界在任务创建时固化。每段完成后立即写入 `job_segments` 检查点；worker 停机或加开进程后，恢复时只处理未完成段，已完成段原样复用，计数不会重复汇入。
+
+- 失败隔离：坏记录只让所在段失败，任务立即进入失败态且不写结论；修好输入后可 `POST /jobs/{id}/retry`（可传 `segments` 只重试指定段）或在结果页点“重试失败段 ↗”。
+- 并发接管：任务带租约（`SEGMENT_LEASE_SECONDS`）和单调递增的 `epoch`。抢到租约的进程负责续租；失去资格的旧进程即使晚回结果，写检查点与发布结论都会因 epoch 不匹配被拒绝。`docker compose up -d --scale worker=2` 可加开执行进程。
+- 发布门禁：只有全部分段成功、且获批准的任务才能创建分发计划或生成归档；任一段未成功时结果页只显示分段进度、失败原因与恢复进度。
+- 校验：分段合并结果与整批一次算完完全一致（列联表、χ²、p、Cramer V）；`SEGMENT_MAX_ATTEMPTS` 控制运行时异常的自动重试上限，数据校验错误不自动重试。
 
 ## 技术与本地开发
 Python 3.12 / FastAPI / SQLAlchemy / NumPy / SciPy / scikit-learn；PostgreSQL 16；Redis 7；Nginx；原生 HTML CSS JavaScript ES modules（用户指定）。后端所有校验、持久化和算法在服务端。无前端打包步骤。
